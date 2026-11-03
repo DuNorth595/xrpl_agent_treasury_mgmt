@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2026 Justin Douglas
+# SPDX-License-Identifier: MIT
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-added-large-files
+        args: ["--maxkb=512"]
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+
+  # The seed scanner. A credential in the tree is a hard failure.
+  - repo: local
+    hooks:
+      - id: no-seeds-or-keys
+        name: no seeds or private keys
+        entry: python3 scripts/scan_for_secrets.py
+        language: system
+        pass_filenames: false
+        files: .
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.0
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format

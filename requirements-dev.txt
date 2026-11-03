@@ -1,0 +1,4 @@
+# Development and verification only.
+-r requirements.txt
+pytest>=8.0,<9.0
+pre-commit>=3.5.0

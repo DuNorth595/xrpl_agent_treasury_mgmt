@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: 2026 Justin Douglas
+# SPDX-License-Identifier: MIT
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel in-progress runs on the same branch when a new push lands.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package + dev extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      # The unit suite is ledger-free on purpose. The XRPL node, the
+      # reference ERP, and the signing service are NOT available on a
+      # GitHub runner, so the tests that need them are skipped rather
+      # than faked.
+      - name: Unit tests
+        run: pytest tests/ -q
+
+      - name: The modules import cleanly
+        run: python -c "import xrpl_agent_treasury_mgmt.service, xrpl_agent_treasury_mgmt.executor, xrpl_agent_treasury_mgmt.signer, xrpl_agent_treasury_mgmt.policy"
+
+  credentials:
+    name: Credential scan
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # The credential scanner. It ships with the package, so this is the
+      # SAME check a contributor runs locally - one implementation, one
+      # allowlist, one answer.
+      #
+      # It looks for credentials: XRPL seeds, private key blocks, bearer
+      # tokens, cloud access key ids, GitHub tokens, and assigned secrets.
+      # It does not scan for personal information.
+      - name: Scan for credentials
+        run: python3 scripts/scan_for_secrets.py .
+
+  reuse:
+    name: REUSE license compliance
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install reuse
+        run: python -m pip install --upgrade pip reuse
+
+      - name: Verify REUSE compliance
+        # The README carries an SPDX-REUSE-compliant badge. That claim is only
+        # true if this passes, so it is enforced here rather than trusted.
+        run: reuse lint

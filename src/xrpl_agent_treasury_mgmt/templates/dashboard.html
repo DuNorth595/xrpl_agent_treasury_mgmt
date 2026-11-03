@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ tenant.name }} — Treasury Operations</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='treasury.css') }}">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="mark"></div>
+    <div>
+      <div class="brand-name">Treasury Operations</div>
+      <div class="brand-sub">{{ tenant.name }} &middot; XRPL</div>
+    </div>
+  </div>
+  <nav class="tenant-switch">
+    {% for t in tenants %}
+      <a class="tenant {% if t.id == tenant.id %}active{% endif %}"
+         href="/?tenant={{ t.id }}">{{ t.name }}</a>
+    {% endfor %}
+  </nav>
+  <div class="topbar-right">
+    <span class="pill pill-ok">Ledger Connected</span>
+    <span class="muted mono">{{ now.strftime('%Y-%m-%d %H:%M') }} UTC</span>
+  </div>
+</header>
+
+<section class="banner">
+  <div class="banner-icon">&#9878;</div>
+  <div class="banner-body">
+    <div class="banner-title">Disbursements are constrained to the authorised participant domain</div>
+    <div class="banner-text">
+      Every payment instruction issued by this service carries
+      <code>DomainID</code> <code>{{ tenant.domain_id[:16] }}&hellip;</code>.
+      Where the sender or the beneficiary is not a participant in the domain,
+      the ledger rejects the instruction with <code>tecNO_PERMISSION</code>.
+      Movement beyond the authorised perimeter is therefore prevented by the
+      ledger rather than relied upon from application controls.
+    </div>
+  </div>
+  <div class="banner-stat">
+    <div class="banner-stat-value">{{ members|length }}</div>
+    <div class="banner-stat-label">Authorised participants</div>
+  </div>
+</section>
+
+<main class="wrap">
+
+  {% if plan.blocked %}
+  <section class="alert alert-bad">
+    <div class="alert-icon">!</div>
+    <div>
+      <div class="alert-title">Disbursement planning is withheld</div>
+      <div class="alert-text">{{ plan.blocked_reason }}</div>
+      {% if reconciliation.ledger_exceptions %}
+      <div class="alert-detail">
+        {% for e in reconciliation.ledger_exceptions %}
+        <div>{{ e.get("kind", "exception") }} &mdash; {{ e.get("detail", "") }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  </section>
+  {% endif %}
+
+  <!-- ---------------------------------------------- treasury position -->
+  <section class="grid-4">
+    <div class="card stat">
+      <div class="stat-label">Consolidated position</div>
+      <div class="stat-value">${{ "{:,.2f}".format(consolidated_usd) }}<span class="unit">USD</span></div>
+      <div class="stat-foot">across {{ positions|length }} currencies &middot; at quoted rates</div>
+    </div>
+
+    <div class="card stat">
+      <div class="stat-label">Settlement balance</div>
+      <div class="stat-value">${{ "{:,.2f}".format(balance) }}<span class="unit">RLUSD</span></div>
+      <div class="stat-foot mono">{{ tenant.treasury_account[:16] }}&hellip;</div>
+    </div>
+
+    <div class="card stat">
+      <div class="stat-label">Proposed disbursements</div>
+      <div class="stat-value">{{ plan.planned|length }}</div>
+      <div class="stat-foot">{{ currencies_in_plan }} currencies &middot; ${{ "{:,.2f}".format(plan_usd_total) }} equivalent</div>
+    </div>
+
+    <div class="card stat">
+      <div class="stat-label">Awaiting authorisation</div>
+      <div class="stat-value tier-review">{{ tier_counts.level_2 + tier_counts.level_3 }}</div>
+      <div class="stat-foot">{{ tier_counts.level_3 }} require dual authorisation</div>
+    </div>
+  </section>
+
+  <!-- -------------------------------------------------- data sources -->
+  <section class="card">
+    <div class="card-head">
+      <h2>Data sources</h2>
+      <span class="pill pill-info">Live integrations</span>
+    </div>
+    <table class="data">
+      <thead>
+        <tr><th>Connector</th><th>Kind</th><th>Status</th><th>Detail</th></tr>
+      </thead>
+      <tbody>
+        {% for c in connectors %}
+        <tr>
+          <td class="mono small">{{ c.name }}</td>
+          <td class="small">{{ c.kind }}</td>
+          <td>
+            {% if c.reachable %}
+              <span class="pill pill-ok">Reachable</span>
+            {% else %}
+              <span class="pill pill-bad">Unavailable</span>
+            {% endif %}
+          </td>
+          <td class="small muted">{{ c.detail or "&mdash;" }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="muted small">No external connectors configured.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="card-note">
+      Exchange rates are quoted by
+      <code>{{ rate_status.cache.provider or "no provider" }}</code>
+      {% if rate_status.stale %}
+        <span class="pill pill-warn">Stale</span>
+      {% else %}
+        <span class="pill pill-ok">Current</span>
+      {% endif %}
+      {% if rate_status.cache.fetched_at %}
+        as at <span class="mono">{{ rate_status.cache.fetched_at[:19]|replace("T"," ") }} UTC</span>
+      {% endif %}.
+      A rate lookup failure never alters what is transferred &mdash; only the
+      displayed equivalent is affected. The rate in force at decision time is
+      recorded with the decision, so a historical figure can always be
+      reproduced.
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------ currency position -->
+  <section class="card">
+    <div class="card-head">
+      <h2>Currency positions</h2>
+      <span class="pill pill-info">Read from the ledger</span>
+    </div>
+    <table class="data">
+      <thead>
+        <tr>
+          <th>Currency</th>
+          <th>Asset</th>
+          <th class="num">Holding</th>
+          <th class="num">USD equivalent</th>
+          <th>Issuer</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in positions %}
+        <tr>
+          <td>
+            <span class="ccy-badge">{{ p.ticker }}</span>
+          </td>
+          <td class="mono small">{{ p.asset.hex_code[:24] }}{% if p.asset.hex_code|length > 24 %}&hellip;{% endif %}</td>
+          <td class="num mono strong">{{ p.display }}</td>
+          <td class="num mono">
+            {{ p.usd_equivalent or "&mdash;" }}
+            {% if p.is_estimate %}<span class="muted small"> est.</span>{% endif %}
+          </td>
+          <td class="mono small">{{ p.asset.issuer[:18] }}&hellip;</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="card-note">
+      The treasury settles in RLUSD and disburses in the currency each
+      counterparty invoices in. A US-domiciled treasury paying a Toronto
+      contractor settles in RLUSD and the contractor receives CAD; a Mexico
+      City payroll run settles in MXN. The consolidated figure is presented
+      in US dollars at the quoted rate and is marked as an estimate, because
+      the rate can move between the decision and the settlement.
+    </div>
+  </section>
+
+  <!-- ------------------------------------------- policy + tier structure -->
+  <section class="grid-2">
+    <div class="card">
+      <div class="card-head">
+        <h2>Delegated authority</h2>
+        <span class="pill pill-info">Tenant-scoped</span>
+      </div>
+      <table class="kv">
+        <tr><td>Maximum single disbursement</td><td class="mono num">${{ "{:,.2f}".format(tenant.limits.max_single_transfer_xrp) }}</td></tr>
+        <tr><td>Maximum daily disbursement</td><td class="mono num">${{ "{:,.2f}".format(tenant.limits.max_daily_total_xrp) }}</td></tr>
+        <tr><td>Minimum treasury balance</td><td class="mono num">${{ "{:,.2f}".format(tenant.limits.min_treasury_balance_xrp) }}</td></tr>
+        <tr><td>Manager delegated authority</td><td class="mono num">${{ "{:,.2f}".format(tenant.limits.supervisor_review_threshold_xrp) }}</td></tr>
+        <tr><td>Settlement buffer</td><td class="mono num">{{ tenant.limits.due_date_buffer_hours }} hours</td></tr>
+        <tr><td>Authorised participants</td><td class="mono num">{{ members|length }}</td></tr>
+        <tr><td>Reporting currency</td><td class="mono num">USD</td></tr>
+      </table>
+      <div class="card-note">
+        The domain identifier is resolved from tenant configuration and is never
+        accepted from a request. An instruction names the tenant, the
+        beneficiary and the currency; the service determines the domain and
+        the authorisation tier.
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Authorisation framework</h2>
+        <span class="pill pill-info">Approval matrix</span>
+      </div>
+      <div class="tiers">
+        <div class="tier tier-1">
+          <div class="tier-badge">1</div>
+          <div>
+            <div class="tier-name">Level 1 &mdash; Automatic execution</div>
+            <div class="tier-desc">Within delegated authority. No human authorisation required.</div>
+          </div>
+          <div class="tier-count">{{ tier_counts.level_1 }}</div>
+        </div>
+        <div class="tier tier-2">
+          <div class="tier-badge">2</div>
+          <div>
+            <div class="tier-name">Level 2 &mdash; Single authorisation</div>
+            <div class="tier-desc">Requires {{ tenant.level_2_authorisations }} authorisation{{ "" if tenant.level_2_authorisations == 1 else "s" }}. Escalated for a first payment, a short settlement window, or a missing obligation record.</div>
+          </div>
+          <div class="tier-count">{{ tier_counts.level_2 }}</div>
+        </div>
+        <div class="tier tier-3">
+          <div class="tier-badge">3</div>
+          <div>
+            <div class="tier-name">Level 3 &mdash; Dual authorisation</div>
+            <div class="tier-desc">Requires {{ tenant.level_3_authorisations }} authorisations. Escalated where the amount exceeds the manager&rsquo;s delegated authority, the beneficiary is new, or the participant is designated for supervisor review.</div>
+          </div>
+          <div class="tier-count">{{ tier_counts.level_3 }}</div>
+        </div>
+      </div>
+      <div class="card-note">
+        The service process holds no signing capability that can be exercised
+        without a completed policy evaluation. Instructions escalated above
+        Level 1 are withheld from the signing path until the required
+        authorisations have been recorded against them.
+      </div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------ proposed instructions -->
+  <section class="card">
+    <div class="card-head">
+      <h2>Proposed disbursement instructions</h2>
+      <span class="pill pill-info">{{ plan.planned|length }} instructions</span>
+    </div>
+
+    {% if plan.planned %}
+    <table class="data">
+      <thead>
+        <tr>
+          <th>Obligation</th>
+          <th>Beneficiary account</th>
+          <th>Entity</th>
+          <th class="num">Amount</th>
+          <th class="num">USD equivalent</th>
+          <th>Due</th>
+          <th>Authorisation tier</th>
+          <th>Sign-offs</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for planned in plan.planned %}
+        <tr>
+          <td>
+            <div class="strong">{{ planned.obligation.description }}</div>
+            <div class="muted mono small">{{ planned.obligation.id }}</div>
+          </td>
+          <td class="mono small">{{ planned.transfer.destination_account[:20] }}&hellip;</td>
+          <td>{{ planned.transfer.entity or "&mdash;" }}</td>
+          <td class="num">
+            <span class="ccy-badge ccy-sm">{{ planned.transfer.currency }}</span>
+            <span class="mono strong">{{ "{:,.2f}".format(planned.transfer.amount) }}</span>
+          </td>
+          <td class="num mono">
+            {% if planned.usd_equivalent %}
+              ${{ "{:,.2f}".format(planned.usd_equivalent) }}
+              <span class="muted small">est.</span>
+            {% else %}
+              &mdash;
+            {% endif %}
+          </td>
+          <td class="mono small">{{ planned.obligation.due_date.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td>
+            {% set tier = planned.transfer.__dict__.get("_tier", "level_2") %}
+            {% if tier == "level_1" %}
+              <span class="pill pill-ok">Level 1 &middot; Automatic</span>
+            {% elif tier == "level_2" %}
+              <span class="pill pill-warn">Level 2 &middot; Single</span>
+            {% elif tier == "level_3" %}
+              <span class="pill pill-danger">Level 3 &middot; Dual</span>
+            {% else %}
+              <span class="pill pill-bad">Refused</span>
+            {% endif %}
+            {% if planned.notes %}
+            <div class="muted small reason-line">{{ planned.notes|join("; ")|replace("_", " ") }}</div>
+            {% endif %}
+          </td>
+          <td class="mono small">
+            {% set required = planned.transfer.__dict__.get("_required_authorisations", 0) %}
+            {% if required and required > 0 %}
+              {{ approvals.get(planned.transfer.obligation_id, {}).get("received_count", 0) }} / {{ required }}
+            {% else %}
+              &mdash;
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">No disbursement instructions proposed. Each outstanding obligation is either settled, outside the settlement buffer, or deferred by the minimum-balance rule.</div>
+    {% endif %}
+
+    {% if plan.skipped %}
+    <div class="skipped">
+      <div class="skipped-head">Deferred ({{ plan.skipped|length }})</div>
+      {% for s in plan.skipped %}
+      <div class="skipped-row">
+        <span class="mono">{{ s.obligation_id }}</span>
+        <span class="muted">{{ s.description }}</span>
+        <span class="skipped-reason">{{ s.reason|replace("_", " ") }}</span>
+        <span class="mono num">{{ "{:,.2f}".format(s.amount) }} {{ s.currency }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </section>
+
+  <!-- ------------------------------------------ obligations + audit trail -->
+  <section class="grid-2">
+    <div class="card">
+      <div class="card-head">
+        <h2>Obligations</h2>
+        <span class="pill pill-info">ERP source</span>
+      </div>
+      <table class="data">
+        <thead>
+          <tr><th>Description</th><th>Counterparty</th><th class="num">Amount</th><th>Due</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          {% for o in obligations %}
+          <tr>
+            <td>
+              <div class="strong">{{ o.description }}</div>
+              <div class="muted mono small">{{ o.id }}</div>
+            </td>
+            <td class="small">{{ o.vendor or "&mdash;" }}</td>
+            <td class="num">
+              <span class="ccy-badge ccy-sm">{{ o.currency }}</span>
+              <span class="mono">{{ "{:,.2f}".format(o.amount) }}</span>
+            </td>
+            <td class="mono small">{{ o.due_date.strftime('%Y-%m-%d %H:%M') }}</td>
+            <td>
+              {% if o.id in reconciliation.funded_obligation_ids %}
+                <span class="pill pill-ok">Settled</span>
+              {% else %}
+                <span class="pill pill-warn">Outstanding</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="card-note">
+        The enterprise system is authoritative as to amounts payable; the
+        ledger is authoritative as to value held. Reconciliation precedes
+        planning, so an obligation the ledger already records as settled is
+        not proposed for disbursement a second time.
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Decision log</h2>
+        {% if log_verified.valid %}
+        <span class="pill pill-ok">Chain verified</span>
+        {% else %}
+        <span class="pill pill-bad">Chain broken</span>
+        {% endif %}
+      </div>
+      <div class="log">
+        {% for e in log_entries %}
+        <div class="log-row">
+          <div class="log-dot log-dot-{{ e.event|replace('_','-') }}"></div>
+          <div class="log-body">
+            <div class="log-event">{{ e.event|replace("_", " ")|title }}</div>
+            <div class="log-meta mono small">
+              seq {{ e.sequence }} &middot; {{ e.timestamp[:19]|replace('T',' ') }} UTC
+              &middot; {{ e.entry_hash[:16] }}&hellip;
+            </div>
+          </div>
+        </div>
+        {% else %}
+        <div class="empty">No decisions recorded.</div>
+        {% endfor %}
+      </div>
+      <div class="card-note">
+        Append-only and hash-chained. Each entry carries the hash of its
+        predecessor, so any alteration or removal is detectable on inspection.
+        This is the record an auditor reviews.
+      </div>
+    </div>
+  </section>
+
+  <!-- -------------------------------------------- authorised participants -->
+  <section class="card">
+    <div class="card-head">
+      <h2>Authorised participants</h2>
+      <span class="pill pill-info">Read from the ledger</span>
+    </div>
+    <table class="data">
+      <thead>
+        <tr><th>Account</th><th>Entity</th><th>Role</th><th>Standing</th></tr>
+      </thead>
+      <tbody>
+        {% for m in members %}
+        <tr>
+          <td class="mono small">{{ m }}</td>
+          <td>{{ tenant.cost_centres.get(m, "&mdash;") }}</td>
+          <td>
+            {% if m == tenant.treasury_account %}
+              <span class="pill pill-accent">Treasury</span>
+            {% else %}
+              <span class="pill pill-info">Cost centre</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if m == tenant.treasury_account %}
+              <span class="muted">Domain owner &mdash; participant by definition</span>
+            {% else %}
+              <span class="allowed">Holds an accepted credential in the domain</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="card-note">
+      Participation is established by credential rather than by address. An
+      account is a participant because it holds an <em>accepted</em> credential
+      within the domain, and that standing may be withdrawn without any
+      modification to the account itself.
+    </div>
+  </section>
+
+  <footer class="foot">
+    <span class="mono">{{ tenant.id }} &middot; domain {{ tenant.domain_id[:20] }}&hellip;</span>
+    <span class="muted">xrpl_agent_treasury_mgmt &mdash; local development build</span>
+  </footer>
+
+</main>
+
+</body>
+</html>

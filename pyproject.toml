@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xrpl_agent_treasury_mgmt"
+version = "0.1.0"
+description = "A treasury tool for the XRP Ledger"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{name = "S_DevLabs", email = "S_DevLabs@outlook.com"}]
+keywords = ["xrpl", "ripple", "treasury", "payments", "permissioned-domains"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Accounting",
+]
+
+dependencies = [
+    "flask>=3.0,<4.0",
+    "xrpl-py>=4.5.0,<5.0",
+    "httpx>=0.27,<1.0",
+    "websockets>=13,<16",
+    "waitress>=3.0,<4.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0,<9.0", "pre-commit>=3.5.0"]
+
+[project.urls]
+Homepage = "https://github.com/DuNorth595/xrpl_agent_treasury_mgmt"
+Issues = "https://github.com/DuNorth595/xrpl_agent_treasury_mgmt/issues"
+Changelog = "https://github.com/DuNorth595/xrpl_agent_treasury_mgmt/blob/main/CHANGELOG.md"
+
+
+# No console script. There is no module-level `main()` to point at -
+# the service is started by `run_demo.py`, which assembles the
+# TreasuryService and then serves it. A console script that named a
+# function which did not exist would install an entry point that failed
+# at import.
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.black]
+line-length = 88
+
+[tool.isort]
+profile = "black"
